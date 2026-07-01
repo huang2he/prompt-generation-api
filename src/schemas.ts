@@ -19,7 +19,7 @@ export const PromptGenerationRequest = z.object({
     .optional()
     .default(''),
   language: z.string().default('zh-CN').optional(),
-  model: z.string().optional(),
+  model: z.enum(['qwen3.7-flash', 'qwen3.7-max']).optional(),
   meta_prompt_version: z.string().optional(),
   trace_enabled: z.boolean().optional().default(true)
 })

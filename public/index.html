@@ -163,6 +163,60 @@
         min-height: 150px;
       }
 
+      .mode-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      .mode-card {
+        position: relative;
+        display: block;
+        margin: 0;
+      }
+
+      .mode-card input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .mode-copy {
+        display: block;
+        min-height: 92px;
+        border: 1px solid #cfc5b3;
+        border-radius: 18px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.54);
+        cursor: pointer;
+        transition:
+          border-color 160ms ease,
+          background 160ms ease,
+          transform 160ms ease;
+      }
+
+      .mode-name {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .mode-desc {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .mode-card input:checked + .mode-copy {
+        border-color: var(--accent);
+        background: rgba(201, 79, 45, 0.1);
+        box-shadow: 0 0 0 4px rgba(201, 79, 45, 0.12);
+        transform: translateY(-1px);
+      }
+
       .actions {
         display: flex;
         gap: 12px;
@@ -311,6 +365,27 @@
           </div>
 
           <form id="promptForm">
+            <div class="label-row">
+              <span>生成模式</span>
+              <span class="hint">快速模式默认使用 qwen3.7-flash</span>
+            </div>
+            <div class="mode-grid" role="radiogroup" aria-label="生成模式">
+              <label class="mode-card">
+                <input type="radio" name="generation_mode" value="fast" data-model="qwen3.7-flash" checked />
+                <span class="mode-copy">
+                  <span class="mode-name">快速模式</span>
+                  <span class="mode-desc">适合快速出草稿，速度优先。模型：qwen3.7-flash</span>
+                </span>
+              </label>
+              <label class="mode-card">
+                <input type="radio" name="generation_mode" value="thinking" data-model="qwen3.7-max" />
+                <span class="mode-copy">
+                  <span class="mode-name">思考模式</span>
+                  <span class="mode-desc">适合更复杂场景，质量优先。模型：qwen3.7-max</span>
+                </span>
+              </label>
+            </div>
+
             <label>
               <div class="label-row">
                 <span>通话场景</span>
@@ -383,6 +458,7 @@
           <div class="result-body">
             <div class="result-tools">
               <span id="traceId" class="pill">trace_id: -</span>
+              <span id="modelName" class="pill">model: -</span>
               <button class="secondary" id="copyBtn" type="button" disabled>复制结果</button>
             </div>
             <pre id="result"><span class="empty">生成完成后，system prompt 会显示在这里。</span></pre>
@@ -405,6 +481,7 @@
       const elapsed = document.querySelector("#elapsed");
       const tokenUsage = document.querySelector("#tokenUsage");
       const traceId = document.querySelector("#traceId");
+      const modelName = document.querySelector("#modelName");
 
       let timer = null;
       let startedAt = 0;
@@ -457,6 +534,7 @@
         currentPrompt = data.result.system_prompt;
         result.textContent = currentPrompt;
         copyBtn.disabled = false;
+        modelName.textContent = `model: ${data.result.model || "-"}`;
         const usage = data.result.usage;
         tokenUsage.textContent = usage?.total_tokens ? String(usage.total_tokens) : "-";
         setMessage(resultMessage, "生成成功。", "ok");
@@ -472,11 +550,15 @@
         setStatus("creating");
         tokenUsage.textContent = "-";
         traceId.textContent = "trace_id: -";
+        modelName.textContent = "model: -";
         result.textContent = "任务创建中...";
         setMessage(formMessage, "");
         setMessage(resultMessage, "");
 
         const payload = Object.fromEntries(new FormData(form).entries());
+        const selectedMode = form.querySelector('input[name="generation_mode"]:checked');
+        payload.model = selectedMode?.dataset.model || "qwen3.7-flash";
+        delete payload.generation_mode;
         startedAt = Date.now();
         updateElapsed();
         timer = window.setInterval(updateElapsed, 1000);
