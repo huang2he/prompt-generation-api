@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>外呼智能体prompt生成器</title>
+    <style>
+      :root {
+        --bg: #f2efe8;
+        --ink: #20201d;
+        --muted: #6e6a61;
+        --line: #d8d0c1;
+        --card: #fffaf0;
+        --card-strong: #171816;
+        --accent: #c94f2d;
+        --accent-dark: #8e321c;
+        --ok: #247a4b;
+        --warn: #a36200;
+        --error: #b42318;
+        --shadow: 0 24px 70px rgba(55, 43, 28, 0.16);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        font-family: "Baskerville", "Songti SC", "STSong", Georgia, serif;
+        background:
+          radial-gradient(circle at 8% 10%, rgba(201, 79, 45, 0.16), transparent 30%),
+          radial-gradient(circle at 90% 18%, rgba(36, 122, 75, 0.13), transparent 26%),
+          linear-gradient(135deg, #f7f1e6 0%, var(--bg) 54%, #e9dfcf 100%);
+      }
+
+      .shell {
+        width: min(1440px, calc(100vw - 40px));
+        margin: 0 auto;
+        padding: 36px 0 48px;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+        align-items: flex-end;
+        margin-bottom: 28px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(34px, 5vw, 68px);
+        line-height: 0.95;
+        letter-spacing: -0.055em;
+      }
+
+      .subtitle {
+        max-width: 560px;
+        margin: 14px 0 0;
+        color: var(--muted);
+        font-size: 17px;
+        line-height: 1.6;
+      }
+
+      .badge {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 10px 14px;
+        color: var(--muted);
+        background: rgba(255, 250, 240, 0.78);
+        font-size: 14px;
+        white-space: nowrap;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: minmax(360px, 0.85fr) minmax(420px, 1.15fr);
+        gap: 22px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        background: rgba(255, 250, 240, 0.86);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .panel-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding: 20px 22px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .panel-title {
+        margin: 0;
+        font-size: 20px;
+        letter-spacing: -0.02em;
+      }
+
+      .panel-note {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      form {
+        padding: 22px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 18px;
+      }
+
+      .label-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .hint {
+        color: var(--muted);
+        font-weight: 400;
+        font-size: 12px;
+      }
+
+      textarea,
+      input {
+        width: 100%;
+        border: 1px solid #cfc5b3;
+        border-radius: 16px;
+        padding: 13px 14px;
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.72);
+        font: 15px/1.55 "Songti SC", "STSong", serif;
+        resize: vertical;
+        outline: none;
+      }
+
+      textarea:focus,
+      input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 4px rgba(201, 79, 45, 0.14);
+      }
+
+      textarea.short {
+        min-height: 76px;
+      }
+
+      textarea.mid {
+        min-height: 112px;
+      }
+
+      textarea.long {
+        min-height: 150px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-top: 8px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 13px 20px;
+        background: var(--card-strong);
+        color: #fff8ec;
+        font: 700 15px/1 "Songti SC", "STSong", serif;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--ink);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      .status-strip {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        background: var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .metric {
+        padding: 16px 18px;
+        background: rgba(255, 250, 240, 0.92);
+      }
+
+      .metric b {
+        display: block;
+        font-size: 22px;
+        margin-bottom: 4px;
+      }
+
+      .metric span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .result-body {
+        padding: 22px;
+      }
+
+      .result-tools {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+      }
+
+      .pill {
+        display: inline-flex;
+        max-width: 100%;
+        border-radius: 999px;
+        padding: 8px 12px;
+        background: #efe4d2;
+        color: var(--muted);
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      pre {
+        min-height: 620px;
+        max-height: 74vh;
+        margin: 0;
+        overflow: auto;
+        border-radius: 22px;
+        padding: 22px;
+        color: #f8f0df;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
+          #171816;
+        font: 14px/1.7 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .empty {
+        color: #b9ac94;
+      }
+
+      .message {
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .message.error {
+        color: var(--error);
+      }
+
+      .message.ok {
+        color: var(--ok);
+      }
+
+      @media (max-width: 980px) {
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        main {
+          grid-template-columns: 1fr;
+        }
+
+        pre {
+          min-height: 420px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div>
+          <h1>外呼智能体prompt生成器</h1>
+          <p class="subtitle">
+            输入通话场景、客群、目的、流程和辅助材料，生成一版可直接放进外呼智能体的 system prompt。
+          </p>
+        </div>
+      </header>
+
+      <main>
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">输入字段</h2>
+            <span class="panel-note">4 个必填，1 个可选</span>
+          </div>
+
+          <form id="promptForm">
+            <label>
+              <div class="label-row">
+                <span>通话场景</span>
+                <span class="hint">必填</span>
+              </div>
+              <textarea class="short" name="call_scenario" maxlength="1200" required placeholder="例如：贷款线索回访，用户在广告页提交过咨询。"></textarea>
+            </label>
+
+            <label>
+              <div class="label-row">
+                <span>通话客群</span>
+                <span class="hint">必填</span>
+              </div>
+              <textarea class="short" name="call_audience" maxlength="1500" required placeholder="例如：25-45 岁有资金周转需求的用户，可能只记得提交过咨询。"></textarea>
+            </label>
+
+            <label>
+              <div class="label-row">
+                <span>通话目的</span>
+                <span class="hint">必填</span>
+              </div>
+              <textarea class="short" name="call_purpose" maxlength="1500" required placeholder="例如：确认是否仍有需求，并预约人工顾问回访。"></textarea>
+            </label>
+
+            <label>
+              <div class="label-row">
+                <span>通话流程</span>
+                <span class="hint">必填</span>
+              </div>
+              <textarea class="mid" name="call_flow" maxlength="5000" required placeholder="例如：开场说明身份和来电原因；确认是否方便；确认需求；预约人工；结束。"></textarea>
+            </label>
+
+            <label>
+              <div class="label-row">
+                <span>辅助字段</span>
+                <span class="hint">可选，旧 prompt / 好坏 case / FAQ / 禁说</span>
+              </div>
+              <textarea class="long" name="auxiliary_field" maxlength="20000" placeholder="例如：不要承诺额度和利率；用户问结果时转人工确认。"></textarea>
+            </label>
+
+            <div class="actions">
+              <button id="submitBtn" type="submit">生成 Prompt</button>
+              <button class="secondary" id="fillDemoBtn" type="button">填入示例</button>
+            </div>
+            <div id="formMessage" class="message"></div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">生成结果</h2>
+            <span id="statusText" class="panel-note">等待提交</span>
+          </div>
+
+          <div class="status-strip">
+            <div class="metric">
+              <b id="jobStatus">idle</b>
+              <span>任务状态</span>
+            </div>
+            <div class="metric">
+              <b id="elapsed">0s</b>
+              <span>等待时间</span>
+            </div>
+            <div class="metric">
+              <b id="tokenUsage">-</b>
+              <span>Token</span>
+            </div>
+          </div>
+
+          <div class="result-body">
+            <div class="result-tools">
+              <span id="traceId" class="pill">trace_id: -</span>
+              <button class="secondary" id="copyBtn" type="button" disabled>复制结果</button>
+            </div>
+            <pre id="result"><span class="empty">生成完成后，system prompt 会显示在这里。</span></pre>
+            <div id="resultMessage" class="message"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const form = document.querySelector("#promptForm");
+      const submitBtn = document.querySelector("#submitBtn");
+      const fillDemoBtn = document.querySelector("#fillDemoBtn");
+      const copyBtn = document.querySelector("#copyBtn");
+      const formMessage = document.querySelector("#formMessage");
+      const resultMessage = document.querySelector("#resultMessage");
+      const result = document.querySelector("#result");
+      const statusText = document.querySelector("#statusText");
+      const jobStatus = document.querySelector("#jobStatus");
+      const elapsed = document.querySelector("#elapsed");
+      const tokenUsage = document.querySelector("#tokenUsage");
+      const traceId = document.querySelector("#traceId");
+
+      let timer = null;
+      let startedAt = 0;
+      let currentPrompt = "";
+
+      const setMessage = (node, text, type = "") => {
+        node.textContent = text;
+        node.className = `message ${type}`.trim();
+      };
+
+      const setStatus = (status) => {
+        jobStatus.textContent = status;
+        statusText.textContent = status;
+      };
+
+      const updateElapsed = () => {
+        if (!startedAt) return;
+        elapsed.textContent = `${Math.floor((Date.now() - startedAt) / 1000)}s`;
+      };
+
+      const stopTimer = () => {
+        if (timer) window.clearInterval(timer);
+        timer = null;
+      };
+
+      const pollJob = async (id) => {
+        const response = await fetch(`/web/prompt-generations/${id}`);
+        const body = await response.json();
+        if (!response.ok || body.reason !== "0") {
+          throw new Error(body.detail || "查询任务失败");
+        }
+
+        const data = body.data;
+        setStatus(data.status);
+        traceId.textContent = `trace_id: ${data.trace_id || "-"}`;
+
+        if (data.status === "pending" || data.status === "running") {
+          return false;
+        }
+
+        stopTimer();
+        submitBtn.disabled = false;
+
+        if (data.status === "failed") {
+          setMessage(resultMessage, data.error?.detail || "生成失败", "error");
+          result.textContent = "生成失败，请调整输入后重试。";
+          return true;
+        }
+
+        currentPrompt = data.result.system_prompt;
+        result.textContent = currentPrompt;
+        copyBtn.disabled = false;
+        const usage = data.result.usage;
+        tokenUsage.textContent = usage?.total_tokens ? String(usage.total_tokens) : "-";
+        setMessage(resultMessage, "生成成功。", "ok");
+        return true;
+      };
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        stopTimer();
+        currentPrompt = "";
+        copyBtn.disabled = true;
+        submitBtn.disabled = true;
+        setStatus("creating");
+        tokenUsage.textContent = "-";
+        traceId.textContent = "trace_id: -";
+        result.textContent = "任务创建中...";
+        setMessage(formMessage, "");
+        setMessage(resultMessage, "");
+
+        const payload = Object.fromEntries(new FormData(form).entries());
+        startedAt = Date.now();
+        updateElapsed();
+        timer = window.setInterval(updateElapsed, 1000);
+
+        try {
+          const response = await fetch("/web/prompt-generations", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payload)
+          });
+          const body = await response.json();
+          if (!response.ok || body.reason !== "0") {
+            throw new Error(body.detail || "创建任务失败");
+          }
+
+          const job = body.data;
+          setStatus(job.status);
+          traceId.textContent = `trace_id: ${job.trace_id}`;
+          result.textContent = "生成中，通常需要 30-90 秒。请保持页面打开。";
+
+          let done = false;
+          while (!done) {
+            await new Promise((resolve) => window.setTimeout(resolve, 2500));
+            done = await pollJob(job.prompt_generation_id);
+          }
+        } catch (error) {
+          stopTimer();
+          submitBtn.disabled = false;
+          setStatus("failed");
+          setMessage(formMessage, error.message || "请求失败", "error");
+          result.textContent = "请求失败，请检查服务、鉴权或模型配置。";
+        }
+      });
+
+      copyBtn.addEventListener("click", async () => {
+        if (!currentPrompt) return;
+        await navigator.clipboard.writeText(currentPrompt);
+        setMessage(resultMessage, "已复制到剪贴板。", "ok");
+      });
+
+      fillDemoBtn.addEventListener("click", () => {
+        form.call_scenario.value = "贷款线索回访，用户在广告落地页提交过贷款咨询。";
+        form.call_audience.value = "25-45 岁有资金周转需求的用户，可能只记得提交过咨询，不一定了解具体产品。";
+        form.call_purpose.value = "确认用户是否仍有资金周转需求，并在合规前提下预约人工顾问回访。";
+        form.call_flow.value = "开场说明身份和来电原因；确认是否方便；确认是否本人及需求；简单确认资金用途、期望金额范围和期望时间；用户同意则预约人工顾问，不同意则礼貌结束；用户要求不再联系则记录勿扰。";
+        form.auxiliary_field.value = "坏 case：不要说已获批额度，不要承诺利率，不要索要验证码、密码、完整身份证号或银行卡号。用户问额度或利率时，只能说需要结合资料由人工进一步确认。";
+      });
+    </script>
+  </body>
+</html>
