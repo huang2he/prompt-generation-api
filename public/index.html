@@ -367,14 +367,14 @@
           <form id="promptForm">
             <div class="label-row">
               <span>生成模式</span>
-              <span class="hint">快速模式默认使用 qwen3.7-flash</span>
+              <span class="hint">快速模式默认使用 qwen3.7-plus</span>
             </div>
             <div class="mode-grid" role="radiogroup" aria-label="生成模式">
               <label class="mode-card">
-                <input type="radio" name="generation_mode" value="fast" data-model="qwen3.7-flash" checked />
+                <input type="radio" name="generation_mode" value="fast" data-model="qwen3.7-plus" checked />
                 <span class="mode-copy">
                   <span class="mode-name">快速模式</span>
-                  <span class="mode-desc">适合快速出草稿，速度优先。模型：qwen3.7-flash</span>
+                  <span class="mode-desc">适合快速出草稿，速度优先。模型：qwen3.7-plus</span>
                 </span>
               </label>
               <label class="mode-card">
@@ -557,7 +557,7 @@
 
         const payload = Object.fromEntries(new FormData(form).entries());
         const selectedMode = form.querySelector('input[name="generation_mode"]:checked');
-        payload.model = selectedMode?.dataset.model || "qwen3.7-flash";
+        payload.model = selectedMode?.dataset.model || "qwen3.7-plus";
         delete payload.generation_mode;
         startedAt = Date.now();
         updateElapsed();
