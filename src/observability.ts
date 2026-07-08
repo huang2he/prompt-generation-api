@@ -22,6 +22,8 @@ type GenerationInput = {
   model: string
   metaPrompt: string
   userInput: string
+  name?: string
+  maxTokens?: number
 }
 
 type GenerationOutput = {
@@ -75,6 +77,7 @@ export const createPromptTrace = (params: TraceInput) => {
       call_audience: params.input.call_audience,
       call_purpose: params.input.call_purpose,
       call_flow: params.input.call_flow,
+      agent_identity: params.input.agent_identity,
       auxiliary_field: params.input.auxiliary_field
     }),
     version: params.input.meta_prompt_version || config.metaPromptVersion,
@@ -95,7 +98,7 @@ export const startModelGeneration = (params: GenerationInput) => {
 
   const generation = langfuse.generation({
     traceId: params.traceId,
-    name: 'generate-system-prompt',
+    name: params.name || 'generate-system-prompt',
     model: params.model,
     input: redact({
       system_prompt: params.metaPrompt,
@@ -103,7 +106,7 @@ export const startModelGeneration = (params: GenerationInput) => {
     }),
     modelParameters: {
       temperature: 0.2,
-      max_tokens: config.llmMaxTokens,
+      max_tokens: params.maxTokens ?? config.llmMaxTokens,
       transport: config.llmTransport
     },
     metadata: {

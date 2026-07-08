@@ -16,6 +16,25 @@
 - 当前队列和任务存储都是内存实现，服务重启后任务记录会丢。
 - 当前没有任务列表接口，只能通过 `prompt_generation_id` 查询单个任务。
 
+## 生成管线（A/B/C/D）
+
+请求可带 `pipeline` 字段（默认 `DEFAULT_PIPELINE`，当前 `C`）在同一输入上横向对比四种生成方式：
+
+```text
+A  v0 单阶段（基线，prompts/outbound-v0.md）
+B  v1 单阶段（prompts/generate-v1.md，模型内部隐式推理）
+C  v1 两阶段（analyze → generate，返回体含 blueprint）
+D  v1 三段式（analyze → 金句候选池 → 组装，返回体含 blueprint + golden_lines）
+```
+
+- 分析器 `prompts/analyze-v1.md` 产出作战蓝图（场景类型/行业/人格档位/听者心理/信任弧/金句方向/异议重构/合规红线）。
+- D 的金句候选池由 `GOLDEN_LINE_MODELS` 决定，默认 `qwen3.7-max,gemini-3.5-flash`（qwen 稳、gemini 暖），组装器 best-of-N 择优。
+- 每阶段模型可配：`ANALYZE_MODEL` / `GENERATE_MODEL` / `GOLDEN_LINE_MODELS`。
+- C/D 若 analyze 失败会**静默降级**为单阶段（B），返回体标 `downgraded_from`，不整体失败。
+- 设计与选型实测结论见 `docs/superpowers/specs/2026-07-02-meta-prompt-quality-v1-design.md`。
+
+`gemini` 系为重推理模型，`GEMINI_REASONING_EFFORT=low` 且给足 token，否则会截断。
+
 ## API
 
 主路由：
@@ -240,6 +259,7 @@ WEB_PASSWORD=another-strong-random-password
   "call_audience": "25-45 岁有资金周转需求的用户。",
   "call_purpose": "确认用户是否仍有需求，并预约人工顾问回访。",
   "call_flow": "开场说明身份和来电原因；确认是否方便；确认需求；预约人工；结束。",
+  "agent_identity": "小陈，这边贷款咨询服务的回访专员",
   "auxiliary_field": "不要承诺额度、利率、审批结果；不要索要验证码。"
 }
 ```
@@ -251,9 +271,11 @@ call_scenario    required, max 1200 chars
 call_audience    required, max 1500 chars
 call_purpose     required, max 1500 chars
 call_flow        required, max 5000 chars
+agent_identity   required, max 200 chars   智能体自称（名字+代表方），影响 # 角色设定
 auxiliary_field  optional, max 20000 chars
 language         optional, default zh-CN
-model            optional, overrides QWEN_MODEL
+pipeline         optional, A|B|C|D, default DEFAULT_PIPELINE
+model            optional, overrides GENERATE_MODEL
 trace_enabled    optional, default true
 ```
 

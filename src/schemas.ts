@@ -12,6 +12,7 @@ export const PromptGenerationRequest = z.object({
   call_audience: requiredText('call_audience', 1500),
   call_purpose: requiredText('call_purpose', 1500),
   call_flow: requiredText('call_flow', 5000),
+  agent_identity: requiredText('agent_identity', 200),
   auxiliary_field: z
     .string()
     .trim()
@@ -19,19 +20,23 @@ export const PromptGenerationRequest = z.object({
     .optional()
     .default(''),
   language: z.string().default('zh-CN').optional(),
-  model: z.enum(['qwen3.7-plus', 'qwen3.7-max']).optional(),
+  // pipeline: A = v0 single, B = v1 single, C = v1 two-stage, D = v1 three-stage
+  pipeline: z.enum(['A', 'B', 'C', 'D']).optional(),
+  // optional generate-model override; per-stage models otherwise come from config
+  model: z.string().optional(),
   meta_prompt_version: z.string().optional(),
   trace_enabled: z.boolean().optional().default(true)
 })
 
-export type PromptGenerationRequest = z.infer<
-  typeof PromptGenerationRequest
->
+export type PromptGenerationRequest = z.infer<typeof PromptGenerationRequest>
 
 export type PromptGenerationData = {
   prompt_generation_id: string
   system_prompt: string
   meta_prompt_version: string
+  pipeline: string
+  requested_pipeline?: string
+  downgraded_from?: string
   model: string
   finish_reason?: string
   usage: {
@@ -39,6 +44,8 @@ export type PromptGenerationData = {
     output_tokens?: number
     total_tokens?: number
   } | null
+  blueprint?: unknown
+  golden_lines?: unknown
   trace_id: string
   created_at: string
 }

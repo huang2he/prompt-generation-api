@@ -16,15 +16,25 @@ type ChatCompletionResponse = {
   usage?: ChatCompletionUsage
 }
 
+export type ModelUsage = {
+  input_tokens?: number
+  output_tokens?: number
+  total_tokens?: number
+} | null
+
 export type ModelResult = {
   content: string
   model: string
   finish_reason?: string
-  usage: {
-    input_tokens?: number
-    output_tokens?: number
-    total_tokens?: number
-  } | null
+  usage: ModelUsage
+}
+
+export type CallModelOptions = {
+  model: string
+  systemPrompt: string
+  userInput: string
+  maxTokens?: number
+  temperature?: number
 }
 
 const mockPrompt = `# 角色设定
@@ -74,76 +84,90 @@ const mockPrompt = `# 角色设定
 每轮自检：是否短句；是否只问一个问题；是否推进未收集信息；是否重复追问；是否承诺了不能承诺的内容。
 静默处理：先换一句轻量推进；再切到下一个问题；仍无响应说“喂，您还在听吗？”；最后礼貌结束。ASR 明显错乱时只澄清一次。`
 
-export const callQwen = async (options: {
-  systemPrompt: string
-  userInput: string
-  model?: string
-}) => {
-  const model = options.model || config.qwenModel
+const isGeminiModel = (model: string) => model.toLowerCase().startsWith('gemini')
+
+const toUsage = (usage?: ChatCompletionUsage): ModelUsage =>
+  usage
+    ? {
+        input_tokens: usage.prompt_tokens,
+        output_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens
+      }
+    : null
+
+/**
+ * Unified model call. Supports:
+ *   - mock (MOCK_QWEN=true) -> canned prompt
+ *   - dispatcher transport  -> proxies qwen / gemini via dispatcher
+ *   - direct transport      -> calls qwen or gemini OpenAI-compatible endpoint
+ * Gemini uses reasoning_effort; qwen uses enable_thinking.
+ */
+export const callModel = async (
+  options: CallModelOptions
+): Promise<ModelResult> => {
+  const model = options.model
+  const maxTokens = options.maxTokens ?? config.llmMaxTokens
+  const temperature = options.temperature ?? 0.2
 
   if (config.mockQwen) {
-    return {
-      content: mockPrompt,
-      model,
-      finish_reason: 'stop',
-      usage: null
-    }
+    return { content: mockPrompt, model, finish_reason: 'stop', usage: null }
   }
 
   if (config.llmTransport === 'dispatcher') {
-    return callDispatcherChatCompletion({
-      systemPrompt: options.systemPrompt,
-      userInput: options.userInput,
-      model
-    })
+    return callDispatcherChatCompletion({ ...options, maxTokens, temperature })
   }
 
-  if (!config.qwenApiKey) {
-    throw new Error('QWEN_API_KEY is required when MOCK_QWEN=false')
+  const gemini = isGeminiModel(model)
+  const baseUrl = gemini ? config.geminiBaseUrl : config.qwenBaseUrl
+  const apiKey = gemini ? config.geminiApiKey : config.qwenApiKey
+  if (!apiKey) {
+    throw new Error(
+      `API key is required for model ${model} (transport=direct)`
+    )
   }
 
-  const response = await fetch(`${config.qwenBaseUrl}/chat/completions`, {
+  const body: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: 'system', content: options.systemPrompt },
+      { role: 'user', content: options.userInput }
+    ],
+    temperature,
+    max_tokens: maxTokens
+  }
+  if (gemini) {
+    body.reasoning_effort = config.geminiReasoningEffort
+  } else {
+    body.enable_thinking = config.qwenEnableThinking
+  }
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${config.qwenApiKey}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: 'system',
-          content: options.systemPrompt
-        },
-        {
-          role: 'user',
-          content: options.userInput
-        }
-      ],
-      temperature: 0.2,
-      max_tokens: config.llmMaxTokens,
-      enable_thinking: config.qwenEnableThinking
-    })
+    body: JSON.stringify(body)
   })
 
-  const body = (await response.json().catch(() => null)) as
+  const parsed = (await response.json().catch(() => null)) as
     | ChatCompletionResponse
     | null
 
   if (!response.ok) {
     throw new Error(
-      `Qwen request failed: ${response.status} ${JSON.stringify(body)}`
+      `Model request failed (${model}): ${response.status} ${JSON.stringify(parsed)}`
     )
   }
 
-  const content = body?.choices?.[0]?.message?.content
+  const content = parsed?.choices?.[0]?.message?.content
   if (!content) {
-    throw new Error('Qwen response missing choices[0].message.content')
+    throw new Error(`Model response missing content (${model})`)
   }
-  const finishReason = body?.choices?.[0]?.finish_reason
+  const finishReason = parsed?.choices?.[0]?.finish_reason
   if (finishReason === 'length') {
     throw new Error(
-      `Qwen output was truncated because max_tokens=${config.llmMaxTokens} was reached`
+      `Model output truncated (${model}) at max_tokens=${maxTokens}`
     )
   }
 
@@ -151,16 +175,12 @@ export const callQwen = async (options: {
     content,
     model,
     finish_reason: finishReason,
-    usage: {
-      input_tokens: body?.usage?.prompt_tokens,
-      output_tokens: body?.usage?.completion_tokens,
-      total_tokens: body?.usage?.total_tokens
-    }
+    usage: toUsage(parsed?.usage)
   }
 }
 
 const getDispatcherModelConfig = (model: string) => {
-  if (model.startsWith('gemini-')) {
+  if (isGeminiModel(model)) {
     return {
       baseUrl: config.geminiBaseUrl,
       apiKey: config.geminiApiKey,
@@ -175,11 +195,9 @@ const getDispatcherModelConfig = (model: string) => {
   }
 }
 
-const callDispatcherChatCompletion = async (options: {
-  systemPrompt: string
-  userInput: string
-  model: string
-}) => {
+const callDispatcherChatCompletion = async (
+  options: CallModelOptions & { maxTokens: number; temperature: number }
+): Promise<ModelResult> => {
   if (!config.dispatcherUsername || !config.dispatcherPassword) {
     throw new Error(
       'DISPATCHER_USERNAME and DISPATCHER_PASSWORD are required when LLM_TRANSPORT=dispatcher'
@@ -195,53 +213,54 @@ const callDispatcherChatCompletion = async (options: {
     `${config.dispatcherUsername}:${config.dispatcherPassword}`
   ).toString('base64')
 
+  const gemini = isGeminiModel(options.model)
+  const body: Record<string, unknown> = {
+    base_url: modelConfig.baseUrl,
+    api_key: modelConfig.apiKey,
+    proxy: modelConfig.proxy,
+    timeout_seconds: 180,
+    model: options.model,
+    messages: [
+      { role: 'system', content: options.systemPrompt },
+      { role: 'user', content: options.userInput }
+    ],
+    temperature: options.temperature,
+    max_tokens: options.maxTokens,
+    stream: false
+  }
+  if (gemini) {
+    body.reasoning_effort = config.geminiReasoningEffort
+  } else {
+    body.enable_thinking = config.qwenEnableThinking
+  }
+
   const response = await fetch(`${config.dispatcherBaseUrl}/chat_completion`, {
     method: 'POST',
     headers: {
       Authorization: `Basic ${auth}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      base_url: modelConfig.baseUrl,
-      api_key: modelConfig.apiKey,
-      proxy: modelConfig.proxy,
-      timeout_seconds: 180,
-      model: options.model,
-      messages: [
-        {
-          role: 'system',
-          content: options.systemPrompt
-        },
-        {
-          role: 'user',
-          content: options.userInput
-        }
-      ],
-      temperature: 0.2,
-      max_tokens: config.llmMaxTokens,
-      stream: false,
-      enable_thinking: config.qwenEnableThinking
-    })
+    body: JSON.stringify(body)
   })
 
-  const body = (await response.json().catch(() => null)) as
+  const parsed = (await response.json().catch(() => null)) as
     | ChatCompletionResponse
     | null
 
   if (!response.ok) {
     throw new Error(
-      `Dispatcher request failed: ${response.status} ${JSON.stringify(body)}`
+      `Dispatcher request failed (${options.model}): ${response.status} ${JSON.stringify(parsed)}`
     )
   }
 
-  const content = body?.choices?.[0]?.message?.content
+  const content = parsed?.choices?.[0]?.message?.content
   if (!content) {
-    throw new Error('Dispatcher response missing choices[0].message.content')
+    throw new Error(`Dispatcher response missing content (${options.model})`)
   }
-  const finishReason = body?.choices?.[0]?.finish_reason
+  const finishReason = parsed?.choices?.[0]?.finish_reason
   if (finishReason === 'length') {
     throw new Error(
-      `Dispatcher output was truncated because max_tokens=${config.llmMaxTokens} was reached`
+      `Dispatcher output truncated (${options.model}) at max_tokens=${options.maxTokens}`
     )
   }
 
@@ -249,10 +268,18 @@ const callDispatcherChatCompletion = async (options: {
     content,
     model: options.model,
     finish_reason: finishReason,
-    usage: {
-      input_tokens: body?.usage?.prompt_tokens,
-      output_tokens: body?.usage?.completion_tokens,
-      total_tokens: body?.usage?.total_tokens
-    }
+    usage: toUsage(parsed?.usage)
   }
 }
+
+/** Backwards-compatible wrapper used by the legacy single-call path. */
+export const callQwen = async (options: {
+  systemPrompt: string
+  userInput: string
+  model?: string
+}): Promise<ModelResult> =>
+  callModel({
+    model: options.model || config.qwenModel,
+    systemPrompt: options.systemPrompt,
+    userInput: options.userInput
+  })

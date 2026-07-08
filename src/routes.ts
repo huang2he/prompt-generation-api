@@ -1,8 +1,17 @@
 import type { RequestHandler } from 'express'
+import { analyze } from './analyze.js'
 import { config } from './config.js'
-import { loadMetaPrompt, renderUserInput } from './meta-prompt.js'
+import { generateGoldenLines } from './golden-lines.js'
+import {
+  loadGeneratePrompt,
+  loadLegacyMetaPrompt,
+  renderAnalyzeInput,
+  renderGenerateInput,
+  renderUserInput,
+  type GoldenLineCandidateSet
+} from './meta-prompt.js'
 import { cleanSystemPrompt, validateSystemPrompt } from './output.js'
-import { callQwen } from './qwen.js'
+import { callModel, type ModelResult, type ModelUsage } from './qwen.js'
 import {
   createPromptTrace,
   endModelGeneration,
@@ -17,6 +26,7 @@ import {
 } from './schemas.js'
 
 type PromptJobStatus = 'pending' | 'running' | 'succeeded' | 'failed'
+type Pipeline = 'A' | 'B' | 'C' | 'D'
 
 type PromptJob = {
   prompt_generation_id: string
@@ -62,6 +72,72 @@ const patchJob = (id: string, patch: Partial<PromptJob>) => {
   })
 }
 
+const resolvePipeline = (input: PromptGenerationRequest): Pipeline => {
+  const raw = (input.pipeline || config.defaultPipeline || 'C').toUpperCase()
+  return (['A', 'B', 'C', 'D'].includes(raw) ? raw : 'C') as Pipeline
+}
+
+const sumUsage = (usages: ModelUsage[]): ModelUsage => {
+  const acc = { input_tokens: 0, output_tokens: 0, total_tokens: 0 }
+  let any = false
+  for (const usage of usages) {
+    if (!usage) continue
+    any = true
+    acc.input_tokens += usage.input_tokens || 0
+    acc.output_tokens += usage.output_tokens || 0
+    acc.total_tokens += usage.total_tokens || 0
+  }
+  return any ? acc : null
+}
+
+/** Run one model stage with a Langfuse span around it. */
+const callStage = async (
+  job: PromptJob,
+  opts: {
+    name: string
+    model: string
+    systemPrompt: string
+    userInput: string
+    maxTokens: number
+    temperature: number
+  }
+): Promise<ModelResult> => {
+  const generation = startModelGeneration({
+    traceId: job.trace_id,
+    jobId: job.prompt_generation_id,
+    model: opts.model,
+    metaPrompt: opts.systemPrompt,
+    userInput: opts.userInput,
+    name: opts.name,
+    maxTokens: opts.maxTokens
+  })
+  const startedAt = Date.now()
+  try {
+    const result = await callModel({
+      model: opts.model,
+      systemPrompt: opts.systemPrompt,
+      userInput: opts.userInput,
+      maxTokens: opts.maxTokens,
+      temperature: opts.temperature
+    })
+    endModelGeneration({
+      generation,
+      content: result.content,
+      usage: result.usage,
+      latencyMs: Date.now() - startedAt
+    })
+    return result
+  } catch (error) {
+    endModelGeneration({
+      generation,
+      content: `ERROR: ${error instanceof Error ? error.message : String(error)}`,
+      usage: null,
+      latencyMs: Date.now() - startedAt
+    })
+    throw error
+  }
+}
+
 const drainQueue = () => {
   while (
     runningJobs < Math.max(1, config.maxConcurrentJobs) &&
@@ -89,39 +165,104 @@ const runPromptJob = async (
     started_at: new Date().toISOString()
   })
 
-  try {
-    const metaPrompt = await loadMetaPrompt()
-    const userInput = renderUserInput(input)
-    const model = input.model || config.qwenModel
-    const generation = startModelGeneration({
-      traceId: job.trace_id,
-      jobId,
-      model,
-      metaPrompt,
-      userInput
-    })
-    const startedAt = Date.now()
-    const modelResult = await callQwen({
-      systemPrompt: metaPrompt,
-      userInput,
-      model: input.model
-    })
-    endModelGeneration({
-      generation,
-      content: modelResult.content,
-      usage: modelResult.usage,
-      latencyMs: Date.now() - startedAt
-    })
+  const requestedPipeline = resolvePipeline(input)
+  const generateModel = input.model || config.generateModel
+  const usages: ModelUsage[] = []
+  let pipeline: Pipeline = requestedPipeline
+  let downgradedFrom: string | undefined
+  let blueprint: unknown
+  let goldenSets: GoldenLineCandidateSet[] | undefined
 
-    const systemPrompt = cleanSystemPrompt(modelResult.content)
-    const validation = validateSystemPrompt(systemPrompt)
+  try {
+    // Stage 1: analyze (pipelines C, D). On failure, downgrade to B (single-call).
+    if (pipeline === 'C' || pipeline === 'D') {
+      try {
+        const generation = startModelGeneration({
+          traceId: job.trace_id,
+          jobId,
+          model: config.analyzeModel,
+          metaPrompt: '[analyze-v1 meta prompt]',
+          userInput: renderAnalyzeInput(input),
+          name: 'analyze-blueprint',
+          maxTokens: config.analyzeMaxTokens
+        })
+        const startedAt = Date.now()
+        const analyzeResult = await analyze(input, config.analyzeModel)
+        endModelGeneration({
+          generation,
+          content: analyzeResult.raw,
+          usage: analyzeResult.usage,
+          latencyMs: Date.now() - startedAt
+        })
+        blueprint = analyzeResult.blueprint
+        usages.push(analyzeResult.usage)
+      } catch (error) {
+        downgradedFrom = pipeline
+        pipeline = 'B'
+        updatePromptTrace({
+          traceId: job.trace_id,
+          jobId,
+          status: 'failed',
+          error: `analyze downgrade: ${error instanceof Error ? error.message : String(error)}`
+        })
+      }
+    }
+
+    // Stage 2: golden-line candidate pool (pipeline D, only when blueprint exists).
+    if (pipeline === 'D' && blueprint) {
+      const generation = startModelGeneration({
+        traceId: job.trace_id,
+        jobId,
+        model: config.goldenLineModels.join('+'),
+        metaPrompt: '[golden-lines-v1 meta prompt]',
+        userInput: '[blueprint + fields]',
+        name: 'golden-line-pool',
+        maxTokens: config.goldenMaxTokens
+      })
+      const startedAt = Date.now()
+      const golden = await generateGoldenLines(
+        input,
+        blueprint as never,
+        config.goldenLineModels
+      )
+      endModelGeneration({
+        generation,
+        content: JSON.stringify({ sets: golden.sets, errors: golden.errors }),
+        usage: sumUsage(golden.usages),
+        latencyMs: Date.now() - startedAt
+      })
+      golden.usages.forEach((u) => usages.push(u))
+      goldenSets = golden.sets
+    }
+
+    // Stage 3: generate the final system prompt.
+    const usesLegacy = requestedPipeline === 'A'
+    const systemPrompt = usesLegacy
+      ? await loadLegacyMetaPrompt()
+      : await loadGeneratePrompt()
+    const userInput = usesLegacy
+      ? renderUserInput(input)
+      : renderGenerateInput(input, { blueprint, goldenLines: goldenSets })
+
+    const modelResult = await callStage(job, {
+      name: 'generate-system-prompt',
+      model: generateModel,
+      systemPrompt,
+      userInput,
+      maxTokens: config.llmMaxTokens,
+      temperature: usesLegacy ? 0.2 : 0.4
+    })
+    usages.push(modelResult.usage)
+
+    const systemPromptOut = cleanSystemPrompt(modelResult.content)
+    const validation = validateSystemPrompt(systemPromptOut)
     if (!validation.ok) {
       updatePromptTrace({
         traceId: job.trace_id,
         jobId,
         status: 'failed',
         error: validation.reason,
-        usage: modelResult.usage
+        usage: sumUsage(usages)
       })
       patchJob(jobId, {
         status: 'failed',
@@ -130,7 +271,9 @@ const runPromptJob = async (
           detail: 'Model output validation failed',
           details: {
             reason: validation.reason,
-            missing_sections: validation.missingSections
+            missing_sections: validation.missingSections,
+            pipeline,
+            requested_pipeline: requestedPipeline
           }
         }
       })
@@ -141,11 +284,17 @@ const runPromptJob = async (
     const completedAt = new Date().toISOString()
     const data: PromptGenerationData = {
       prompt_generation_id: jobId,
-      system_prompt: systemPrompt,
-      meta_prompt_version: input.meta_prompt_version || config.metaPromptVersion,
+      system_prompt: systemPromptOut,
+      meta_prompt_version:
+        input.meta_prompt_version || config.metaPromptVersion,
+      pipeline,
+      requested_pipeline: requestedPipeline,
+      downgraded_from: downgradedFrom,
       model: modelResult.model,
       finish_reason: modelResult.finish_reason,
-      usage: modelResult.usage,
+      usage: sumUsage(usages),
+      blueprint,
+      golden_lines: goldenSets,
       trace_id: job.trace_id,
       created_at: completedAt
     }
@@ -156,9 +305,10 @@ const runPromptJob = async (
       status: 'succeeded',
       output: {
         prompt_generation_id: jobId,
-        system_prompt: systemPrompt
+        pipeline,
+        system_prompt: systemPromptOut
       },
-      usage: modelResult.usage
+      usage: data.usage
     })
     patchJob(jobId, {
       status: 'succeeded',
@@ -176,7 +326,8 @@ const runPromptJob = async (
       status: 'failed',
       completed_at: new Date().toISOString(),
       error: {
-        detail: error instanceof Error ? error.message : 'Internal server error'
+        detail: error instanceof Error ? error.message : 'Internal server error',
+        details: { pipeline, requested_pipeline: requestedPipeline }
       }
     })
   } finally {
