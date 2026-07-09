@@ -1,11 +1,12 @@
-const REQUIRED_SECTIONS = [
-  '# 角色设定',
-  '# 任务目标',
-  '# 对话原则',
-  '# 对话流程',
-  '# 抗拒与常见问题处理',
-  '# 绝对禁止事项',
-  '# 每轮自检与静默兜底'
+// 第 6 章接受两种标题:新版「红线与禁令」(机审安全,避开"绝对"极限词)与旧版「绝对禁止事项」(兼容 v0/存量)。
+const SECTION_ALTERNATIVES: string[][] = [
+  ['# 角色设定'],
+  ['# 任务目标'],
+  ['# 对话原则'],
+  ['# 对话流程'],
+  ['# 抗拒与常见问题处理'],
+  ['# 红线与禁令', '# 绝对禁止事项'],
+  ['# 每轮自检与静默兜底']
 ]
 
 const FORBIDDEN_SECTIONS = [
@@ -36,9 +37,9 @@ export const cleanSystemPrompt = (value: string) => {
 }
 
 export const validateSystemPrompt = (value: string) => {
-  const missingSections = REQUIRED_SECTIONS.filter(
-    (section) => !value.includes(section)
-  )
+  const missingSections = SECTION_ALTERNATIVES.filter(
+    (alternatives) => !alternatives.some((section) => value.includes(section))
+  ).map((alternatives) => alternatives[0])
 
   if (!value.startsWith('# 角色设定')) {
     return {
@@ -68,11 +69,11 @@ export const validateSystemPrompt = (value: string) => {
   }
 
   const headings = value.match(/^# /gm) || []
-  if (headings.length !== REQUIRED_SECTIONS.length) {
+  if (headings.length !== SECTION_ALTERNATIVES.length) {
     return {
       ok: false,
       missingSections,
-      reason: `system_prompt must contain exactly ${REQUIRED_SECTIONS.length} top-level sections`
+      reason: `system_prompt must contain exactly ${SECTION_ALTERNATIVES.length} top-level sections`
     }
   }
 

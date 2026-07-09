@@ -43,7 +43,7 @@ export const config = {
   defaultPipeline: (process.env.DEFAULT_PIPELINE || 'C').toUpperCase(),
 
   // Meta prompt files
-  metaPromptVersion: process.env.META_PROMPT_VERSION || 'outbound-v2.0.0',
+  metaPromptVersion: process.env.META_PROMPT_VERSION || 'outbound-v2.1.0',
   legacyMetaPromptPath:
     process.env.LEGACY_META_PROMPT_PATH || 'prompts/outbound-v0.md',
   analyzeMetaPromptPath:

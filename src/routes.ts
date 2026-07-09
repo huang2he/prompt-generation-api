@@ -316,6 +316,11 @@ const runPromptJob = async (
       result: data
     })
   } catch (error) {
+    // Log job failures with root cause — API 只回简短 detail,完整原因进服务日志
+    console.error('[runPromptJob] error:', error)
+    if (error instanceof Error && (error as Error & { cause?: unknown }).cause) {
+      console.error('[runPromptJob] cause:', (error as Error & { cause?: unknown }).cause)
+    }
     updatePromptTrace({
       traceId: job.trace_id,
       jobId,
