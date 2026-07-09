@@ -17,6 +17,15 @@ const FORBIDDEN_SECTIONS = [
   '# 成功、结束与交接'
 ]
 
+// 变量/占位符硬闸门:运行时没有变量功能,任何占位形态都不许流出。
+// 注意只拦半角 [] {},全角【】是对话流程段落标题的合法符号。
+const PLACEHOLDER_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /[{}]/, label: 'curly braces' },
+  { pattern: /[\[\]]/, label: 'square brackets' },
+  { pattern: /\$[A-Za-z_]/, label: 'dollar variable' },
+  { pattern: /_{3,}/, label: 'blank slot underscores' }
+]
+
 const INCOMPLETE_ENDING_PATTERNS = [
   /[，、：；（(]$/,
   /(或者|以及|并|且|和|或|若|如果|当|则|与|及|第[一二三四五六七八九十]+次静默或)$/,
@@ -54,6 +63,17 @@ export const validateSystemPrompt = (value: string) => {
       ok: false,
       missingSections,
       reason: 'system_prompt missing required sections'
+    }
+  }
+
+  const placeholder = PLACEHOLDER_PATTERNS.find(({ pattern }) =>
+    pattern.test(value)
+  )
+  if (placeholder) {
+    return {
+      ok: false,
+      missingSections,
+      reason: `system_prompt contains placeholder-like content (${placeholder.label}); variables are not supported at runtime`
     }
   }
 
